@@ -23,6 +23,7 @@ using Monopoly.RealEstate;
 using Monopoly.RealEstate.Factories;
 using Shuffler;
 using UserInterface;
+using UserInterface.Choices;
 using UserInterface.IO;
 
 namespace Monopoly
@@ -35,11 +36,15 @@ namespace Monopoly
         private const int TotalRoundsInAGame = 20;
         private const int StandardInitialBalance = 200;
         private const int RewardForPassingGo = 200;
-        private const string TurnInitializationCommandFactoryKey = "turn initialization command factory";
+        private const string PrimaryTurnActionKey = nameof(PrimaryTurnActionKey);
+        private const string PrimaryTurnActionCommandQueueKey = nameof(PrimaryTurnActionCommandQueueKey);
+        private const string MortgageOptionKey = nameof(MortgageOptionKey);
+        private const string MortgageOptionCommandQueueKey = nameof(MortgageOptionCommandQueueKey);
 
         protected override void Load(ContainerBuilder builder)
         {
-            LoadUserInterface(builder);
+            builder.RegisterModule<DefaultUiModule>();
+
             LoadBoard(builder);
             LoadCommands(builder);
             LoadConstructionServices(builder);
@@ -53,11 +58,6 @@ namespace Monopoly
             builder.RegisterType<Runner>().AsSelf();
         }
 
-        private static void LoadUserInterface(ContainerBuilder builder)
-        {
-            builder.RegisterType<ConsoleReaderWriter>().As<ITextReaderWriter>().As<ITextWriter>();
-        }
-
         private static void LoadBoard(ContainerBuilder builder)
         {
             builder.RegisterType<DirectedCycleBoard>().As<IBoardWithEnd>().InstancePerLifetimeScope();
@@ -68,16 +68,14 @@ namespace Monopoly
         {
             LoadMonopolySpecificCommands(builder);
             LoadGeneralCommands(builder);
-            builder.RegisterType<SelfExtendingCommandQueue>().As<ICommandQueue>().WithParameter(
-                new ResolvedParameter(
-                    (parameters, context) => parameters.ParameterType == typeof(ICommandFactory),
-                    (parameters, context) => context.ResolveKeyed<ICommandFactory>(TurnInitializationCommandFactoryKey)));
+            LoadCommandQueues(builder);
         }
 
         private static void LoadMonopolySpecificCommands(ContainerBuilder builder)
         {
             LoadSpaceStrategies(builder);
-            LoadTurnInitializationCommandFactory(builder);
+            LoadPrimaryTurnActionCommandFactory(builder);
+            LoadMortgageOptionCommandFactory(builder);
         }
 
         private static void LoadSpaceStrategies(ContainerBuilder builder)
@@ -93,7 +91,7 @@ namespace Monopoly
             builder.RegisterType<LandOnPropertyCommandFactory>();
         }
 
-        private static void LoadTurnInitializationCommandFactory(ContainerBuilder builder)
+        private static void LoadPrimaryTurnActionCommandFactory(ContainerBuilder builder)
         {
             var rollAndMoveParameter = new ResolvedParameter(
                 (parameters, context) => parameters.Name == "decoratedCommandFactory",
@@ -119,7 +117,23 @@ namespace Monopoly
                 .As<ICommandFactory>()
                 .WithParameter(completedLapsRewardingCommandFactoryParameter)
                 .WithParameter(textWriterParameter)
-                .Keyed<ICommandFactory>(TurnInitializationCommandFactoryKey);
+                .Keyed<ICommandFactory>(PrimaryTurnActionKey);
+        }
+
+        private static void LoadMortgageOptionCommandFactory(ContainerBuilder builder)
+        {
+            var offerMortgageOptionCommandFactoryParameter = new ResolvedParameter(
+                (parameters, context) => parameters.ParameterType == typeof(ICommandFactory),
+                (parameters, context) => context.Resolve<OfferMortgageOptionCommandFactory>());
+            var textWriterParameter = new ResolvedParameter(
+                (parameters, context) => parameters.ParameterType == typeof(ITextWriter),
+                (parameters, context) => context.Resolve<ITextWriter>());
+
+            builder.RegisterType<VerboseCommandFactoryDecorator>()
+                .As<ICommandFactory>()
+                .WithParameter(offerMortgageOptionCommandFactoryParameter)
+                .WithParameter(textWriterParameter)
+                .Keyed<ICommandFactory>(MortgageOptionKey);
         }
 
         private static void LoadGeneralCommands(ContainerBuilder builder)
@@ -128,6 +142,31 @@ namespace Monopoly
             builder.RegisterType<CompletedLapsRewardingCommandFactoryDecorator>().AsSelf();
             builder.RegisterType<VerboseCommandFactoryDecorator>().AsSelf();
             builder.RegisterType<RollAndMoveCommandFactory>().AsSelf();
+        }
+
+        private static void LoadCommandQueues(ContainerBuilder builder)
+        {
+            builder.RegisterType<SelfExtendingCommandQueue>().As<ICommandQueue>()
+                .WithParameter(
+                    new ResolvedParameter(
+                        (parameters, context) => parameters.ParameterType == typeof(ICommandFactory),
+                        (parameters, context) => context.ResolveKeyed<ICommandFactory>(MortgageOptionKey)))
+                .Keyed<ICommandQueue>(MortgageOptionCommandQueueKey);
+
+            builder.RegisterType<SelfExtendingCommandQueue>().As<ICommandQueue>()
+                .WithParameter(
+                    new ResolvedParameter(
+                        (parameters, context) => parameters.ParameterType == typeof(ICommandFactory),
+                        (parameters, context) => context.ResolveKeyed<ICommandFactory>(PrimaryTurnActionKey)))
+                .Keyed<ICommandQueue>(PrimaryTurnActionCommandQueueKey);
+
+            builder.Register(context => new[]
+                {
+                    context.ResolveKeyed<ICommandQueue>(MortgageOptionCommandQueueKey),
+                    context.ResolveKeyed<ICommandQueue>(PrimaryTurnActionCommandQueueKey),
+                    context.ResolveKeyed<ICommandQueue>(MortgageOptionCommandQueueKey)
+                })
+                .As<ICommandQueue[]>();
         }
 
         private static void LoadConstructionServices(ContainerBuilder builder)
@@ -222,6 +261,7 @@ namespace Monopoly
                 .InstancePerLifetimeScope();
 
             LoadRentServices(builder);
+            LoadMortgageServices(builder);
             builder.RegisterType<MonopolyPropertyCommandFactories>();
         }
 
@@ -250,6 +290,14 @@ namespace Monopoly
             builder.RegisterType<RailroadRentStrategy>();
             builder.RegisterType<StreetRentStrategy>();
             builder.RegisterType<UtilityRentStrategy>();
+        }
+
+        private static void LoadMortgageServices(ContainerBuilder builder)
+        {
+            builder.RegisterType<MortgageOptionCommandFactory>()
+                .As<IMortgageOptionCommandFactory>()
+                .WithParameters(PaymentCommandFactoryParameters);
+            builder.RegisterType<OfferMortgageOptionCommandFactory>();
         }
 
         private static void LoadSpaces(ContainerBuilder builder)
